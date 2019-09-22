@@ -1,5 +1,6 @@
 from itertools import cycle
 import Crypto.Cipher
+from random import choice, randint
 from Crypto.Cipher import AES
 
 FREQ = {
@@ -33,7 +34,7 @@ FREQ = {
 }
 
 
-def hexToBase(hexstring: str) -> bytes:
+def hex_to_base(hexstring: str) -> bytes:
     from base64 import b64encode
     return b64encode(bytes.fromhex(hexstring))
 
@@ -42,18 +43,15 @@ def fixedxor(plaintext: str, key: str) -> bytes:
     plain = bytes.fromhex(plaintext)
     key_value = bytes.fromhex(key)
     if len(plain) != len(key_value):
-        return None
-    return b"".join(bytes([plain[i] ^ key_value[i]]) for i in range(len(key_value))).hex()
+        return b""
+    return b"".join(bytes([plain[i] ^ key_value[i]]) for i in range(len(key_value)))
 
 
-def singlebytexor(text: str, key_char: int) -> bytes:
-    try:
-        return b"".join(bytes([char ^ key_char]) for char in bytes.fromhex(text))
-    except TypeError:
-        return b"".join(bytes([char ^ key_char]) for char in text)
+def singlebytexor(text: bytes, key_char: int) -> bytes:
+    return b"".join(bytes([char ^ key_char]) for char in text)
 
 
-def xor(text: str, key) -> bytes:
+def xor(text: bytes, key: bytes) -> bytes:
     try:
         return b"".join(bytes([ord(p) ^ ord(k)]) for (p, k) in zip(text, cycle(key)))
     except TypeError:
@@ -67,7 +65,7 @@ def count_score(target: bytes) -> float:
     return score
 
 
-def attack_singlebytexor(text: str) -> dict:
+def attack_singlebytexor(text: bytes) -> dict:
     higher_score = float()
     winner = b""
     key = b""
@@ -85,14 +83,15 @@ def detect_singlebytexor(filename: str):
     targets = open(filename, 'r').read().split("\n")
     candidates = list()
     for target in targets:
-        candidates.append(attack_singlebytexor(target))
+        candidates.append(attack_singlebytexor(bytes.fromhex(target)))
     return sorted(candidates, key=lambda c: c['score'], reverse=True)[0]["plain"]
 
 
-def haming(src1: str, src2: str) -> int:
+def haming(src1: bytes, src2: bytes) -> int:
     dist = 0
     r = xor(src1, src2)
-    for byte in r: dist += bin(byte).count('1')
+    for byte in r:
+        dist += bin(byte).count('1')
     return dist
 
 
@@ -100,17 +99,17 @@ def attack_repeatingxor(data: str) -> dict:
     from base64 import b64decode
     from itertools import combinations
     data = b64decode(data)
-    hamingdist = 0
+    haming_dist = 0
     key_sizes = dict()
     for key_size in range(2, 41):
 
         blocks = [data[i:i + key_size] for i in range(0, len(data), key_size)][:4]
         blocks = list(combinations(blocks, 2))
         for pair in blocks:
-            hamingdist += haming(*pair)
-        hamingdist /= 6 * key_size
-        key_sizes[key_size] = hamingdist
-    true_keysize = sorted(key_sizes.items(), key=lambda x: x[1])[0][0]
+            haming_dist += haming(*pair)
+        haming_dist /= 6 * key_size
+        key_sizes[key_size] = haming_dist
+    true_keysize, _ = sorted(key_sizes.items(), key=lambda x: x[1])[0]
 
     bytes_blocks = list()
     block = bytes()
@@ -125,7 +124,7 @@ def attack_repeatingxor(data: str) -> dict:
     for keychar in bytes_blocks:
         key += bytes([attack_singlebytexor(keychar)["key"]])
 
-    return ({"plain": xor(data, key), "key": key, "keysize": true_keysize})
+    return {"plain": xor(data, key), "key": key, "keysize": true_keysize}
 
 
 def count_replays(data: bytes) -> int:
@@ -163,7 +162,7 @@ def pkcs7_unpad(data: bytes) -> bytes:
     return data[:-pad]
 
 
-def aes_decrypt_cbc(data: str, key: bytes, iv: bytes) -> bytes:
+def aes_decrypt_cbc(data: str, key: bytes, iv: bytes, pad=True) -> bytes:
     decrypted_data = bytes()
     aes = AES.new(key, AES.MODE_ECB)
     prev_block = iv
@@ -172,16 +171,60 @@ def aes_decrypt_cbc(data: str, key: bytes, iv: bytes) -> bytes:
         block = aes.decrypt(current_block)
         decrypted_data += xor(block, prev_block)
         prev_block = current_block
-    return pkcs7_unpad(decrypted_data)
+    if pad:
+        return pkcs7_unpad(decrypted_data)
+    return decrypted_data
 
 
-def aes_encrypt_cbc(data: str, key: bytes, iv: bytes) -> bytes:
+def aes_decrypt_ecb(data: bytes, key: bytes, pad=True) -> bytes:
+    decrypted_data = bytes()
+    aes = AES.new(key, AES.MODE_ECB)
+    for i in range(0, len(data), AES.block_size):
+        current_block = data[i:i + AES.block_size]
+        decrypted_data += aes.decrypt(current_block)
+    if pad:
+        return pkcs7_unpad(decrypted_data)
+    return decrypted_data
+
+
+def aes_encrypt_cbc(plain: bytes, key: bytes, iv: bytes) -> bytes:
     encrypted_data = bytes()
     aes = AES.new(key, AES.MODE_ECB)
     prev_block = iv
-    for i in range(0, len(data), AES.block_size):
-        current_block = pkcs7_pad(data[i:i + AES.block_size], AES.block_size)
+    for i in range(0, len(plain), AES.block_size):
+        current_block = pkcs7_pad(plain[i:i + AES.block_size], AES.block_size)
         block = aes.encrypt(xor(current_block, prev_block))
         encrypted_data += block
         prev_block = block
     return encrypted_data
+
+
+def aes_encrypt_ecb(plain: bytes, key: bytes) -> bytes:
+    encrypted_data = bytes()
+    aes = AES.new(key, AES.MODE_ECB)
+    for i in range(0, len(plain), AES.block_size):
+        current_block = pkcs7_pad(plain[i:i + AES.block_size], AES.block_size)
+        encrypted_data += aes.encrypt(current_block)
+    return encrypted_data
+
+
+def random_bytes(size: int) -> bytes:
+    return b''.join(choice([bytes([i]) for i in range(256)]) for _ in range(size))
+
+
+def pad_random_data(data: bytes) -> bytes:
+    return b''.join(choice([bytes([i]) for i in range(256)]) for _ in range(randint(5, 11))) + \
+           data + \
+           b''.join(choice([bytes([i]) for i in range(256)]) for _ in range(randint(5, 11)))
+
+
+def aes_encrypt_random(plain: bytes) -> (str, bytes):
+    plain = pad_random_data(plain)
+    if randint(0, 1):
+        return "ECB", aes_encrypt_ecb(plain, random_bytes(16))
+    else:
+        return "CBC", aes_encrypt_cbc(plain, random_bytes(16), random_bytes(16))
+
+
+def aes_detect(cipher_text: bytes) -> str:
+    return "ECB" if count_replays(cipher_text) > 0 else "CBC"

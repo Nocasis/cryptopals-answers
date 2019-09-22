@@ -25,3 +25,11 @@ class TestSecondSuite:
         encrypted = cryptlib.aes_encrypt_cbc(decrypted, key, iv)
         assert (encrypted_origin == encrypted)
         assert (decrypted == cryptlib.aes_decrypt_cbc(encrypted, key, iv))
+
+    # Challenge 11
+    def test_detect_aes(self):
+        from random import randint
+        for _ in range(100):
+            text = bytes([0]) * randint(60, 80)
+            mode, ciphertext = cryptlib.aes_encrypt_random(text)
+            assert(mode == cryptlib.aes_detect(ciphertext))

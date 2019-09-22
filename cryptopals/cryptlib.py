@@ -1,5 +1,6 @@
 from itertools import cycle
 import Crypto.Cipher
+from Crypto.Cipher import AES
 
 FREQ = {
     "a": 8.167,
@@ -42,7 +43,6 @@ def fixedxor(plaintext: str, key: str) -> bytes:
     key_value = bytes.fromhex(key)
     if len(plain) != len(key_value):
         return None
-    from base64 import b64encode
     return b"".join(bytes([plain[i] ^ key_value[i]]) for i in range(len(key_value))).hex()
 
 
@@ -53,7 +53,7 @@ def singlebytexor(text: str, key_char: int) -> bytes:
         return b"".join(bytes([char ^ key_char]) for char in text)
 
 
-def xor(text: str, key: str) -> bytes:
+def xor(text: str, key) -> bytes:
     try:
         return b"".join(bytes([ord(p) ^ ord(k)]) for (p, k) in zip(text, cycle(key)))
     except TypeError:
@@ -161,3 +161,27 @@ def pkcs7_unpad(data: bytes) -> bytes:
         return data
     pad = data[-1]
     return data[:-pad]
+
+
+def aes_decrypt_cbc(data: str, key: bytes, iv: bytes) -> bytes:
+    decrypted_data = bytes()
+    aes = AES.new(key, AES.MODE_ECB)
+    prev_block = iv
+    for i in range(0, len(data), AES.block_size):
+        current_block = data[i:i + AES.block_size]
+        block = aes.decrypt(current_block)
+        decrypted_data += xor(block, prev_block)
+        prev_block = current_block
+    return pkcs7_unpad(decrypted_data)
+
+
+def aes_encrypt_cbc(data: str, key: bytes, iv: bytes) -> bytes:
+    encrypted_data = bytes()
+    aes = AES.new(key, AES.MODE_ECB)
+    prev_block = iv
+    for i in range(0, len(data), AES.block_size):
+        current_block = pkcs7_pad(data[i:i + AES.block_size], AES.block_size)
+        block = aes.encrypt(xor(current_block, prev_block))
+        encrypted_data += block
+        prev_block = block
+    return encrypted_data

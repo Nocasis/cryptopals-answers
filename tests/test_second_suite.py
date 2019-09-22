@@ -14,3 +14,14 @@ class TestSecondSuite:
     # Challenge 9.3
     def test_pkcs7_unpad(self):
         assert(cryptlib.pkcs7_unpad(b"YELLOW SUBMARINE\x04\x04\x04\x04") == b"YELLOW SUBMARINE")
+
+    # Challenge 10
+    def test_aes_cbc(self):
+        from base64 import b64decode
+        key = b"YELLOW SUBMARINE"
+        iv = b"\x00" * 16
+        encrypted_origin = b64decode(open("res/10.txt", "r").read())
+        decrypted = cryptlib.aes_decrypt_cbc(encrypted_origin, key, iv)
+        encrypted = cryptlib.aes_encrypt_cbc(decrypted, key, iv)
+        assert (encrypted_origin == encrypted)
+        assert (decrypted == cryptlib.aes_decrypt_cbc(encrypted, key, iv))

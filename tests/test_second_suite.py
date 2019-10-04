@@ -33,3 +33,10 @@ class TestSecondSuite:
             text = bytes([0]) * randint(60, 80)
             mode, ciphertext = cryptlib.aes_encrypt_random(text)
             assert(mode == cryptlib.aes_detect(ciphertext))
+
+    # Challenge 12
+    def test_byte_ecb_decryption(self):
+        from base64 import b64decode
+        unknown_string = b64decode(open("res/12.txt", "rb").read())
+        KEY = cryptlib.random_bytes(16)
+        assert(cryptlib.byte_ecb_decryption(unknown_string, KEY) == b"Rollin' in my 5.0\nWith my rag-top down so my hair can blow\nThe girlies on standby waving just to say hi\nDid you stop? No, I just drove by\n")

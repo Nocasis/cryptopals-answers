@@ -228,3 +228,42 @@ def aes_encrypt_random(plain: bytes) -> (str, bytes):
 
 def aes_detect(cipher_text: bytes) -> str:
     return "ECB" if count_replays(cipher_text) > 0 else "CBC"
+
+
+def aes_detect_keysize_ecb(key: bytes, max_keysize=128) -> int:
+    for size in range(1, max_keysize):
+        tmp_plain = bytes([ord('A')]) * size
+        tmp_ciphertext = aes_encrypt_ecb(tmp_plain, key)
+        if count_replays(tmp_ciphertext) > 0:
+            return int(size / 2)
+    return 0
+
+
+def next_byte(block_size: int, curr_dec_msg: bytes, unknown_data: bytes, key: bytes):
+    length_to_use = (block_size - (1 + len(curr_dec_msg))) % block_size
+    prefix = bytes([0]) * length_to_use
+
+    cracking_size = length_to_use + len(curr_dec_msg) + 1
+    real_ciphertext = aes_encrypt_ecb(prefix + unknown_data, key)
+    for i in range(256):
+        fake_ciphertext = aes_encrypt_ecb(prefix + curr_dec_msg + bytes([i]) + unknown_data, key)
+        if fake_ciphertext[:cracking_size] == real_ciphertext[:cracking_size]:
+            return bytes([i])
+    return b""
+
+
+def byte_ecb_decryption(unknown_data: bytes, key: bytes) -> bytes:
+    text = bytes([0]) * 64
+    secret = b""
+
+    mode = aes_detect(aes_encrypt_ecb(text + unknown_data, key))
+    if mode != "ECB":
+        return None
+
+    key_size = aes_detect_keysize_ecb(key)
+    unknown_data_size = len(aes_encrypt_ecb(unknown_data, key))
+
+    for _ in range(unknown_data_size):
+        secret += next_byte(key_size, secret, unknown_data, key)
+
+    return pkcs7_unpad(secret)

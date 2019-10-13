@@ -33,6 +33,8 @@ FREQ = {
     ' ': 19.18182
 }
 
+aes_block_size = AES.block_size
+
 
 def hex_to_base(hexstring: str) -> bytes:
     from base64 import b64encode
@@ -133,7 +135,7 @@ def count_replays(data: bytes) -> int:
     return len(blocks) - len(set(blocks))
 
 
-def detect_aec_ecb(encrypted_strings: list) -> list:
+def detect_aes_ecb(encrypted_strings: list) -> list:
     count = 1
     aes_strings_ecb = list()
     for s in encrypted_strings:
@@ -143,6 +145,11 @@ def detect_aec_ecb(encrypted_strings: list) -> list:
     return aes_strings_ecb
 
 
+class PaddingError(Exception):
+    def __init__(self, text):
+        self.txt = text
+
+
 def pkcs7_pad(data: bytes, block_size: int) -> bytes:
     if len(data) == block_size:
         return data
@@ -150,19 +157,25 @@ def pkcs7_pad(data: bytes, block_size: int) -> bytes:
     return data + bytes([pad_size]) * pad_size
 
 
-def is_pkcs7_padded(data: bytes) -> bool:
-    pad = data[-1]
-    return all(pad == b for b in data[-pad:])
+def is_pkcs7_padded(data: bytes, block_size: int) -> bool:
+    is_full_block_of_padding_exist = all(block_size == b for b in data[-block_size:])
+    is_correct_prev_last_padding = False
+    if is_full_block_of_padding_exist:
+        pad_size = data[-block_size - 1]
+        is_correct_prev_last_padding = all(pad_size == b for b in data[-block_size-pad_size:-block_size])
+    if not is_correct_prev_last_padding:
+        raise PaddingError(data)
+    return is_correct_prev_last_padding
 
 
-def pkcs7_unpad(data: bytes) -> bytes:
-    if not is_pkcs7_padded(data):
+def pkcs7_unpad(data: bytes, block_size: int) -> bytes:
+    if not is_pkcs7_padded(data, block_size):
         return data
-    pad = data[-1]
-    return data[:-pad]
+    pad = data[-1 - block_size]
+    return data[:-pad - block_size]
 
 
-def aes_decrypt_cbc(data: str, key: bytes, iv: bytes, pad=True) -> bytes:
+def aes_decrypt_cbc(data: bytes, key: bytes, iv: bytes, pad=True) -> bytes:
     decrypted_data = bytes()
     aes = AES.new(key, AES.MODE_ECB)
     prev_block = iv
@@ -172,7 +185,7 @@ def aes_decrypt_cbc(data: str, key: bytes, iv: bytes, pad=True) -> bytes:
         decrypted_data += xor(block, prev_block)
         prev_block = current_block
     if pad:
-        return pkcs7_unpad(decrypted_data)
+        return pkcs7_unpad(decrypted_data, AES.block_size)
     return decrypted_data
 
 
@@ -183,7 +196,7 @@ def aes_decrypt_ecb(data: bytes, key: bytes, pad=True) -> bytes:
         current_block = data[i:i + AES.block_size]
         decrypted_data += aes.decrypt(current_block)
     if pad:
-        return pkcs7_unpad(decrypted_data)
+        return pkcs7_unpad(decrypted_data, AES.block_size)
     return decrypted_data
 
 
@@ -191,23 +204,38 @@ def aes_encrypt_cbc(plain: bytes, key: bytes, iv: bytes) -> bytes:
     encrypted_data = bytes()
     aes = AES.new(key, AES.MODE_ECB)
     prev_block = iv
+    need_padded_block = False
     for i in range(0, len(plain), AES.block_size):
-        current_block = pkcs7_pad(plain[i:i + AES.block_size], AES.block_size)
+        current_block = plain[i:i + AES.block_size]
+        padded_block = pkcs7_pad(current_block, AES.block_size)
+        if current_block != padded_block:
+            current_block = padded_block
+            need_padded_block = True
         block = aes.encrypt(xor(current_block, prev_block))
         encrypted_data += block
         prev_block = block
+    if need_padded_block:
+        return encrypted_data + aes.encrypt(bytes([AES.block_size]) * AES.block_size)
     return encrypted_data
 
 
 def aes_encrypt_ecb(plain: bytes, key: bytes) -> bytes:
     encrypted_data = bytes()
     aes = AES.new(key, AES.MODE_ECB)
+    need_padded_block = False
     for i in range(0, len(plain), AES.block_size):
-        current_block = pkcs7_pad(plain[i:i + AES.block_size], AES.block_size)
+        current_block = plain[i:i + AES.block_size]
+        padded_block = pkcs7_pad(current_block, AES.block_size)
+        if current_block != padded_block:
+            current_block = padded_block
+            need_padded_block = True
         encrypted_data += aes.encrypt(current_block)
+    if need_padded_block:
+        return encrypted_data + aes.encrypt(bytes([AES.block_size]) * AES.block_size)
     return encrypted_data
 
 
+# it is not secure, just for task
 def random_bytes(size: int) -> bytes:
     return b''.join(choice([bytes([i]) for i in range(256)]) for _ in range(size))
 
@@ -239,31 +267,132 @@ def aes_detect_keysize_ecb(key: bytes, max_keysize=128) -> int:
     return 0
 
 
-def next_byte(block_size: int, curr_dec_msg: bytes, unknown_data: bytes, key: bytes):
-    length_to_use = (block_size - (1 + len(curr_dec_msg))) % block_size
-    prefix = bytes([0]) * length_to_use
-
-    cracking_size = length_to_use + len(curr_dec_msg) + 1
-    real_ciphertext = aes_encrypt_ecb(prefix + unknown_data, key)
+def next_byte_simple(block_size: int, curr_dec_msg: bytes, unknown_data: bytes, key: bytes):
+    size_of_helping_vector = (block_size - (1 + len(curr_dec_msg))) % block_size
+    prefix = bytes([0]) * size_of_helping_vector
+    size = size_of_helping_vector + len(curr_dec_msg) + 1
+    ciphertext = aes_encrypt_ecb(prefix + unknown_data, key)
     for i in range(256):
         fake_ciphertext = aes_encrypt_ecb(prefix + curr_dec_msg + bytes([i]) + unknown_data, key)
-        if fake_ciphertext[:cracking_size] == real_ciphertext[:cracking_size]:
+        if fake_ciphertext[:size] == ciphertext[:size]:
             return bytes([i])
     return b""
 
 
-def byte_ecb_decryption(unknown_data: bytes, key: bytes) -> bytes:
-    text = bytes([0]) * 64
+def byte_ecb_decryption_simple(unknown_data: bytes, key: bytes) -> bytes:
     secret = b""
 
-    mode = aes_detect(aes_encrypt_ecb(text + unknown_data, key))
+    mode = aes_detect(aes_encrypt_ecb(bytes([0]) * 64 + unknown_data, key))
     if mode != "ECB":
-        return None
+        return b""
 
     key_size = aes_detect_keysize_ecb(key)
-    unknown_data_size = len(aes_encrypt_ecb(unknown_data, key))
-
+    unknown_data_size = len(unknown_data)
     for _ in range(unknown_data_size):
-        secret += next_byte(key_size, secret, unknown_data, key)
+        secret += next_byte_simple(key_size, secret, unknown_data, key)
 
-    return pkcs7_unpad(secret)
+    return secret
+
+
+def parse_key_value(data: bytes) -> dict:
+    data = data.replace(b" ", b"")
+    pairs = data.split(b"&")
+    json_key_value = dict()
+    for pair in pairs:
+        key_value = pair.split(b"=")
+        json_key_value[key_value[0].decode()] = key_value[1].decode()
+    return json_key_value
+
+
+class Database:
+    def __init__(self):
+        self.users = dict()
+
+    def add_user(self, email):
+        profile = self.profile_for(email)
+        if not self.__is_user_exists(profile):
+            self.users[len(self.users)] = profile
+
+    def __is_user_exists(self, profile):
+        exist = False
+        for prof in self.users.values():
+            if prof["email"] == profile["email"]:
+                exist = True
+        return exist
+
+    def profile_for(self, email):
+        try:
+            email = email.replace("&", "").replace("=", "")
+            profile = {"email": email, "uid": len(self.users), "role": "user"}
+            return profile
+        except Exception:
+            return {"email": "error@gmail.com", "uid": len(self.users), "role": "user"}
+
+    def encode_profile(self, email):
+        profile = self.profile_for(email)
+        user_profile = ""
+        for k, v in profile.items():
+            user_profile += f"{k}={v}&"
+        return user_profile[:-1]
+
+    def remove_user(self, profile):
+        if profile in self.users:
+            self.users.remove(profile)
+
+
+def cut_and_paste():
+    key = random_bytes(AES.block_size)
+    db = Database()
+    user_profile = db.encode_profile("ssss@gmail.com").encode()
+    encrypted_user = aes_encrypt_ecb(user_profile, key)
+
+    admin_profile = db.encode_profile("s@mail.com" + "admin" + (bytes([11]) * 11).decode()).encode()
+    encrypted_admin = aes_encrypt_ecb(admin_profile, key)
+    hacked_string = encrypted_user[:AES.block_size * 2] + \
+                    encrypted_admin[AES.block_size:AES.block_size * 2] + \
+                    encrypted_user[-AES.block_size:]
+    hacked_profile = aes_decrypt_ecb(hacked_string, key)
+    return hacked_profile
+
+
+def next_byte_harder(rand_prefix_size: int, block_size: int, curr_dec_msg: bytes,random_prefix: bytes, unknown_data: bytes, key: bytes):
+    size_of_helping_vector = (block_size - rand_prefix_size - (1 + len(curr_dec_msg))) % block_size
+    prefix = bytes([0]) * size_of_helping_vector
+    size = size_of_helping_vector + len(curr_dec_msg) + 1 + rand_prefix_size
+    ciphertext = aes_encrypt_ecb(random_prefix + prefix + unknown_data, key)
+    for i in range(256):
+        fake_ciphertext = aes_encrypt_ecb(random_prefix + prefix + curr_dec_msg + bytes([i]) + unknown_data, key)
+        if fake_ciphertext[:size] == ciphertext[:size]:
+            return bytes([i])
+    return b""
+
+
+def get_random_prefix_size(random_prefix: bytes, unknown_data: bytes, key: bytes, key_size: int):
+    first = aes_encrypt_ecb(random_prefix + unknown_data, key)
+    second = aes_encrypt_ecb(random_prefix + bytes([0]) + unknown_data, key)
+    random_prefix_size = 0
+    for i in range(0, len(second), key_size):
+        if first[i:i + AES.block_size] != second[i:i + key_size]:
+            random_prefix_size = i
+            break
+    for i in range(key_size):
+        test = bytes([0])*(2 * key_size + i)
+        test_encryption = aes_encrypt_ecb(random_prefix + test + unknown_data, key)
+        if count_replays(test_encryption) > 0:
+            return random_prefix_size + key_size - i if i is not 0 else random_prefix_size
+
+
+def byte_ecb_decryption_harder(random_prefix: bytes, unknown_data: bytes, key: bytes) -> bytes:
+    secret = b""
+
+    mode = aes_detect(aes_encrypt_ecb(random_prefix + bytes([0]) * 64 + unknown_data, key))
+    if mode != "ECB":
+        return b""
+
+    key_size = aes_detect_keysize_ecb(key)
+    random_prefix_size = get_random_prefix_size(random_prefix, unknown_data, key, key_size)
+    unknown_data_size = len(unknown_data)
+    for _ in range(unknown_data_size):
+        secret += next_byte_harder(random_prefix_size, key_size, secret, random_prefix, unknown_data, key)
+
+    return secret

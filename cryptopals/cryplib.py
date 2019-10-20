@@ -157,22 +157,21 @@ def pkcs7_pad(data: bytes, block_size: int) -> bytes:
     return data + bytes([pad_size]) * pad_size
 
 
-def is_pkcs7_padded(data: bytes, block_size: int) -> bool:
-    is_full_block_of_padding_exist = all(block_size == b for b in data[-block_size:])
-    is_correct_prev_last_padding = False
-    if is_full_block_of_padding_exist:
-        pad_size = data[-block_size - 1]
-        is_correct_prev_last_padding = all(pad_size == b for b in data[-block_size-pad_size:-block_size])
-    if not is_correct_prev_last_padding:
+def is_pkcs7_padded(data: bytes) -> bool:
+    padding = data[-1]
+    is_correct = all(padding == b for b in data[-padding:])
+    if not is_correct:
+        print(data)
+        print([(padding,b) for b in data[-padding:]])
         raise PaddingError(data)
-    return is_correct_prev_last_padding
+    return is_correct
 
 
-def pkcs7_unpad(data: bytes, block_size: int) -> bytes:
-    if not is_pkcs7_padded(data, block_size):
+def pkcs7_unpad(data: bytes) -> bytes:
+    if not is_pkcs7_padded(data):
         return data
-    pad = data[-1 - block_size]
-    return data[:-pad - block_size]
+    pad = data[-1]
+    return data[:-pad]
 
 
 def aes_decrypt_cbc(data: bytes, key: bytes, iv: bytes, pad=True) -> bytes:
@@ -185,7 +184,7 @@ def aes_decrypt_cbc(data: bytes, key: bytes, iv: bytes, pad=True) -> bytes:
         decrypted_data += xor(block, prev_block)
         prev_block = current_block
     if pad:
-        return pkcs7_unpad(decrypted_data, AES.block_size)
+        return pkcs7_unpad(decrypted_data)
     return decrypted_data
 
 
@@ -196,7 +195,7 @@ def aes_decrypt_ecb(data: bytes, key: bytes, pad=True) -> bytes:
         current_block = data[i:i + AES.block_size]
         decrypted_data += aes.decrypt(current_block)
     if pad:
-        return pkcs7_unpad(decrypted_data, AES.block_size)
+        return pkcs7_unpad(decrypted_data)
     return decrypted_data
 
 
@@ -204,33 +203,25 @@ def aes_encrypt_cbc(plain: bytes, key: bytes, iv: bytes) -> bytes:
     encrypted_data = bytes()
     aes = AES.new(key, AES.MODE_ECB)
     prev_block = iv
-    need_padded_block = False
     for i in range(0, len(plain), AES.block_size):
         current_block = plain[i:i + AES.block_size]
         padded_block = pkcs7_pad(current_block, AES.block_size)
-        if current_block != padded_block:
-            current_block = padded_block
-            need_padded_block = True
-        block = aes.encrypt(xor(current_block, prev_block))
+        block = aes.encrypt(xor(padded_block, prev_block))
         encrypted_data += block
         prev_block = block
-    if need_padded_block:
-        return encrypted_data + aes.encrypt(bytes([AES.block_size]) * AES.block_size)
+    if len(plain) % AES.block_size == 0:
+        return encrypted_data + aes.encrypt(xor(bytes([AES.block_size]) * AES.block_size, prev_block))
     return encrypted_data
 
 
 def aes_encrypt_ecb(plain: bytes, key: bytes) -> bytes:
     encrypted_data = bytes()
     aes = AES.new(key, AES.MODE_ECB)
-    need_padded_block = False
     for i in range(0, len(plain), AES.block_size):
         current_block = plain[i:i + AES.block_size]
         padded_block = pkcs7_pad(current_block, AES.block_size)
-        if current_block != padded_block:
-            current_block = padded_block
-            need_padded_block = True
-        encrypted_data += aes.encrypt(current_block)
-    if need_padded_block:
+        encrypted_data += aes.encrypt(padded_block)
+    if len(plain) % AES.block_size == 0:
         return encrypted_data + aes.encrypt(bytes([AES.block_size]) * AES.block_size)
     return encrypted_data
 
@@ -335,22 +326,16 @@ class Database:
             user_profile += f"{k}={v}&"
         return user_profile[:-1]
 
-    def remove_user(self, profile):
-        if profile in self.users:
-            self.users.remove(profile)
-
 
 def cut_and_paste():
     key = random_bytes(AES.block_size)
     db = Database()
     user_profile = db.encode_profile("ssss@gmail.com").encode()
     encrypted_user = aes_encrypt_ecb(user_profile, key)
-
     admin_profile = db.encode_profile("s@mail.com" + "admin" + (bytes([11]) * 11).decode()).encode()
     encrypted_admin = aes_encrypt_ecb(admin_profile, key)
     hacked_string = encrypted_user[:AES.block_size * 2] + \
-                    encrypted_admin[AES.block_size:AES.block_size * 2] + \
-                    encrypted_user[-AES.block_size:]
+                    encrypted_admin[AES.block_size:AES.block_size * 2]
     hacked_profile = aes_decrypt_ecb(hacked_string, key)
     return hacked_profile
 
@@ -372,7 +357,7 @@ def get_random_prefix_size(random_prefix: bytes, unknown_data: bytes, key: bytes
     second = aes_encrypt_ecb(random_prefix + bytes([0]) + unknown_data, key)
     random_prefix_size = 0
     for i in range(0, len(second), key_size):
-        if first[i:i + AES.block_size] != second[i:i + key_size]:
+        if first[i:i + key_size] != second[i:i + key_size]:
             random_prefix_size = i
             break
     for i in range(key_size):
@@ -396,3 +381,54 @@ def byte_ecb_decryption_harder(random_prefix: bytes, unknown_data: bytes, key: b
         secret += next_byte_harder(random_prefix_size, key_size, secret, random_prefix, unknown_data, key)
 
     return secret
+
+
+def get_user_data(userdata: bytes) -> bytes:
+    prefix = b"comment1=cooking%20MCs;userdata="
+    sufix = b";comment2=%20like%20a%20pound%20of%20bacon"
+    return prefix + userdata.replace(b"=", b"").replace(b";", b"") + sufix
+
+
+def is_admin_in_data(encrypted: bytes, key: bytes, iv: bytes):
+    decrypted = aes_decrypt_cbc(encrypted, key, iv)
+    return b";admin=true;" in decrypted
+
+
+def get_prefix_size(key: bytes, iv: bytes):
+    block_size = len(key)
+    first = aes_encrypt_cbc(get_user_data(b""), key, iv)
+    second = aes_encrypt_cbc(get_user_data(bytes([0])), key, iv)
+    prefix_size = 0
+    for i in range(0, len(second), block_size):
+        if first[i:i + block_size] != second[i:i + block_size]:
+            prefix_size = i
+            break
+    for i in range(block_size + 1):
+        first = bytes([0]) * i + bytes([1])
+        second = bytes([0]) * i + bytes([2])
+        enc_first = aes_encrypt_cbc(get_user_data(first), key, iv)
+        enc_second = aes_encrypt_cbc(get_user_data(second), key, iv)
+        if enc_first[prefix_size:prefix_size + block_size] == enc_second[prefix_size:prefix_size + block_size]:
+            return prefix_size + (block_size - i)
+
+
+def cbc_bitflipping_attack():
+    block_size = AES.block_size
+    key = random_bytes(block_size)
+    iv = random_bytes(block_size)
+    data = get_user_data(b"hack.admin.true.")
+    encrypted = aes_encrypt_cbc(data, key, iv)
+    prefix_size = get_prefix_size(key, iv)
+    encrypted = encrypted[:prefix_size + len("hack")-block_size] + \
+                bytes([encrypted[prefix_size + len("hack") - block_size] ^ ord(".") ^ ord(";")]) + \
+                encrypted[prefix_size + len("hack") + 1 - block_size:]
+
+    encrypted = encrypted[:prefix_size + len("hack;admin") - block_size] + \
+                bytes([encrypted[prefix_size + len("hack;admin") - block_size] ^ ord(".") ^ ord("=")]) + \
+                encrypted[prefix_size + len("hack;admin") + 1 - block_size:]
+
+    encrypted = encrypted[:prefix_size + len("hack;admin=true") - block_size] + \
+                bytes([encrypted[prefix_size + len("hack;admin=true") - block_size] ^ ord(".") ^ ord(";")]) + \
+                encrypted[prefix_size + len("hack;admin=true") + 1 - block_size:]
+    is_admin = is_admin_in_data(encrypted, key, iv)
+    return is_admin

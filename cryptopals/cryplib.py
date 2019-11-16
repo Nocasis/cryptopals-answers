@@ -1,6 +1,7 @@
+from base64 import b64decode
 from itertools import cycle
 import Crypto.Cipher
-from random import choice, randint
+from random import choice, randint, getrandbits
 from Crypto.Cipher import AES
 
 FREQ = {
@@ -161,8 +162,8 @@ def is_pkcs7_padded(data: bytes) -> bool:
     padding = data[-1]
     is_correct = all(padding == b for b in data[-padding:])
     if not is_correct:
-        print(data)
-        print([(padding,b) for b in data[-padding:]])
+        # print(data)
+        # print([(padding,b) for b in data[-padding:]])
         raise PaddingError(data)
     return is_correct
 
@@ -432,3 +433,105 @@ def cbc_bitflipping_attack():
                 encrypted[prefix_size + len("hack;admin=true") + 1 - block_size:]
     is_admin = is_admin_in_data(encrypted, key, iv)
     return is_admin
+
+
+class PaddingOracleAttack:
+    def __init__(self):
+        self.key = random_bytes(AES.block_size)
+        self.iv = random_bytes(AES.block_size)
+
+    def encrypt(self, plain):
+        return aes_encrypt_cbc(plain, self.key, self.iv), self.iv
+
+    def decrypt_and_validate_padding(self, cipher: bytes, iv_: bytes):
+        decrypted = aes_decrypt_cbc(cipher, self.key, iv_, pad=False)
+        try:
+            return is_pkcs7_padded(decrypted)
+        except PaddingError:
+            return False
+
+
+def choice_random_string_from_file(filename: str):
+    strings = open(filename, "r").read()
+    strings = strings.split("\n")
+    return b64decode(strings[choice(range(len(strings)))])
+
+
+def gen_fake_prev_block(prev_block: bytes, current_byte: int, padding_len: int, found_plain: bytes) ->bytes:
+    char_index = len(prev_block) - padding_len
+
+    char = current_byte ^ prev_block[char_index] ^ padding_len
+
+    fake_prev = prev_block[:char_index] + bytes([char])
+    block_size = 16
+    j = 0
+    for i in range(block_size - padding_len + 1, block_size):
+        forced_char = prev_block[i] ^ found_plain[j] ^ padding_len
+        fake_prev += bytes([forced_char])
+        j += 1
+    return fake_prev
+
+
+def padding_oracle_attack():
+    blackbox = PaddingOracleAttack()
+    plain = choice_random_string_from_file("res/17.txt")
+    encryped, iv = blackbox.encrypt(plain)
+    ciphertext = [encryped[i:i + AES.block_size] for i in range(0, len(encryped), AES.block_size)]
+    prepared_ciphertext = [iv] + ciphertext
+
+    our_plain = b""
+    for block_index in range(1, len(prepared_ciphertext)):
+        block_plain = b""
+        for pad_len in range(1, AES.block_size + 1):
+            tmp_bytes = b""
+            last_byte = b""
+            for i in range(256):
+                fake_prev_block = gen_fake_prev_block(prepared_ciphertext[block_index - 1], i, pad_len, block_plain)
+                is_fail = blackbox.decrypt_and_validate_padding(prepared_ciphertext[block_index], fake_prev_block)
+                if is_fail:
+                    tmp_bytes += bytes([i])
+            if len(tmp_bytes) == 1:
+                last_byte = tmp_bytes
+                block_plain = last_byte + block_plain
+                continue
+            for byte in tmp_bytes:
+                for i in range(256):
+                    fake_prev_block = gen_fake_prev_block(prepared_ciphertext[block_index - 1], i, pad_len + 1,
+                                                          bytes([byte]) + block_plain)
+                    is_fail = blackbox.decrypt_and_validate_padding(prepared_ciphertext[block_index], fake_prev_block)
+                    if is_fail:
+                        last_byte = bytes([byte])
+                        break
+            block_plain = last_byte + block_plain
+
+        our_plain += block_plain
+    return pkcs7_unpad(our_plain) == plain
+
+
+def gen_big_num():
+    return getrandbits(256)
+
+
+def diffie_hellman(p: int, g: int) -> bool:
+    a = gen_big_num() % p
+    b = gen_big_num() % p
+    A = power(g, a, p)  # public key
+    B = power(g, b, p)  # public key
+    s1 = power(B, a, p)  # session
+    s2 = power(A, b, p)  # session
+    return s1 == s2
+
+
+def hex_to_int(hex_string: str) -> int:
+    return int.from_bytes(bytes.fromhex(hex_string), "little")
+
+
+def power(x: int, y: int, p: int) -> int:
+    res = 1
+    x = x % p
+    while y > 0:
+        if y & 1:
+            res = (res * x) % p
+        y = y >> 1
+        x = (x * x) % p
+    return res

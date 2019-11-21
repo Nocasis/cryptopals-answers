@@ -3,6 +3,7 @@ from itertools import cycle
 import Crypto.Cipher
 from random import choice, randint, getrandbits
 from Crypto.Cipher import AES
+from hashlib import sha1
 
 FREQ = {
     "a": 8.167,
@@ -523,7 +524,11 @@ def diffie_hellman(p: int, g: int) -> bool:
 
 
 def hex_to_int(hex_string: str) -> int:
-    return int.from_bytes(bytes.fromhex(hex_string), "little")
+    return int(hex_string, 16)
+
+
+def int_to_bytes(n: int) -> bytes:
+    return n.to_bytes((n.bit_length() + 7) // 8, 'big') or b'\0'
 
 
 def power(x: int, y: int, p: int) -> int:
@@ -535,3 +540,157 @@ def power(x: int, y: int, p: int) -> int:
         y = y >> 1
         x = (x * x) % p
     return res
+
+
+class Client:
+    def __init__(self, p_: int, g_: int):
+        self.p = p_
+        self.g = g_
+        self.private_key = gen_big_num() % self.p  # a
+        self.public_key = power(self.g, self.private_key, self.p)  # A
+        self.session = int()
+
+    def make_session(self, pub_key: int):
+        self.session = power(pub_key, self.private_key, self.p)
+
+    def send_msg(self, msg: bytes):
+        hash_sha1 = sha1()
+        iv = random_bytes(16)  # AES.block_sie
+        s = int_to_bytes(self.session)
+        hash_sha1.update(s)
+        sign = hash_sha1.hexdigest()
+        return aes_encrypt_cbc(msg, sign[:16], iv) + iv
+
+    def decrypt_msg(self, msg: bytes):
+        hash_sha1 = sha1()
+        iv = msg[-16:]
+        encrypted_msg = msg[:-16]
+        s = int_to_bytes(self.session)
+        hash_sha1.update(s)
+        sign = hash_sha1.hexdigest()
+        return aes_decrypt_cbc(encrypted_msg, sign[:16], iv)
+
+
+def normal_flow():
+    p = """ffffffffffffffffffffffffffff"""
+    p = hex_to_int(p)
+    g = 2
+
+    alice = Client(p, g)
+    bob = Client(alice.p, alice.g)
+    bob.make_session(alice.public_key)
+    alice.make_session(bob.public_key)
+
+    msg = b"hello"
+    alices_msg = alice.send_msg(msg)
+    bobs_msg = bob.send_msg(msg)
+
+    return alice.decrypt_msg(bobs_msg) == bob.decrypt_msg(alices_msg)
+
+
+def mitm_flow():
+    p = """ffffffffffffffffffffffffffff"""
+    p = hex_to_int(p)
+    g = 2
+
+    alice = Client(p, g)
+    bob = Client(alice.p, alice.g)
+    bob.make_session(alice.p)
+    alice.make_session(bob.p)
+
+    msg = b"hello"
+    alices_msg = alice.send_msg(msg)
+    bobs_msg = bob.send_msg(msg)
+
+    alice_decrypt = alice.decrypt_msg(bobs_msg)
+    bob_decrypt = bob.decrypt_msg(alices_msg)
+
+    iv = alices_msg[-16:]
+    encrypted_msg = alices_msg[:-16]
+    hash_sha1 = sha1()
+    hash_sha1.update(b'\x00')
+    sign = hash_sha1.hexdigest()
+    hacked_decrypt = aes_decrypt_cbc(encrypted_msg, sign[:16], iv)
+    return hacked_decrypt == alice_decrypt == bob_decrypt
+
+
+def g_equal_one():
+    p = """ffffffff"""
+    p = hex_to_int(p)
+    g = 1
+
+    alice = Client(p, g)
+    bob = Client(alice.p, alice.g)
+    bob.make_session(alice.public_key)
+    alice.make_session(bob.public_key)
+
+    msg = b"hello"
+    alices_msg = alice.send_msg(msg)
+    bobs_msg = bob.send_msg(msg)
+
+    alice_decrypt = alice.decrypt_msg(bobs_msg)
+    bob_decrypt = bob.decrypt_msg(alices_msg)
+
+    iv = alices_msg[-16:]
+    encrypted_msg = alices_msg[:-16]
+    hash_sha1 = sha1()
+    hash_sha1.update(b'\x01')
+    sign = hash_sha1.hexdigest()
+    hacked_decrypt = aes_decrypt_cbc(encrypted_msg, sign[:16], iv)
+    return alice_decrypt == hacked_decrypt
+
+
+def g_equal_p():
+    p = """ffffffff"""
+    p = hex_to_int(p)
+    g = p
+
+    alice = Client(p, g)
+    bob = Client(alice.p, alice.g)
+    bob.make_session(alice.public_key)
+    alice.make_session(bob.public_key)
+
+    msg = b"hello"
+    alices_msg = alice.send_msg(msg)
+    bobs_msg = bob.send_msg(msg)
+
+    alice_decrypt = alice.decrypt_msg(bobs_msg)
+    bob_decrypt = bob.decrypt_msg(alices_msg)
+
+    iv = alices_msg[-16:]
+    encrypted_msg = alices_msg[:-16]
+    hash_sha1 = sha1()
+    hash_sha1.update(b'\x00')
+    sign = hash_sha1.hexdigest()
+    hacked_decrypt = aes_decrypt_cbc(encrypted_msg, sign[:16], iv)
+    return alice_decrypt == hacked_decrypt
+
+
+def g_equal_p_minus_one():
+    p = 25566665
+    g = p-1
+    alice = Client(p, g)
+    bob = Client(alice.p, alice.g)
+    bob.make_session(alice.public_key)
+    alice.make_session(bob.public_key)
+    msg = b"hello"
+    alices_msg = alice.send_msg(msg)
+    bobs_msg = bob.send_msg(msg)
+
+    alice_decrypt = alice.decrypt_msg(bobs_msg)
+    bob_decrypt = bob.decrypt_msg(alices_msg)
+
+    hash_sha1 = sha1()
+    iv = alices_msg[-16:]
+    encrypted_msg = alices_msg[:-16]
+    if alice.public_key == g and bob.public_key == g:
+        s = int_to_bytes(g)
+        hash_sha1.update(s)
+        sign = hash_sha1.hexdigest()
+        hacked_decrypt = aes_decrypt_cbc(encrypted_msg, sign[:16], iv)
+    else:
+        s = int_to_bytes(g)
+        hash_sha1.update(b"\x01")
+        sign = hash_sha1.hexdigest()
+        hacked_decrypt = aes_decrypt_cbc(encrypted_msg, sign[:16], iv)
+    return hacked_decrypt == alice_decrypt

@@ -8,3 +8,23 @@ class TestFirstSuite:
         p = cryplib.hex_to_int(p)
         g = 2
         assert(cryplib.diffie_hellman(p, g) is True)
+
+    # Challenge 34.1
+    def test_normal_flow(self):
+        assert cryplib.normal_flow() is True
+
+    # Challenge 34.2
+    def test_mitm_flow(self):
+        assert cryplib.mitm_flow() is True
+
+    # Challenge 35.1
+    def test_g_equal_one(self):
+        assert cryplib.g_equal_one() is True
+
+    # Challenge 35.2
+    def test_g_equal_p(self):
+        assert cryplib.g_equal_p() is True
+
+    # Challenge 35.3
+    def test_g_equal_p_minus_one(self):
+        assert cryplib.g_equal_p_minus_one() is True

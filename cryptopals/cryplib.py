@@ -527,8 +527,8 @@ def hex_to_int(hex_string: str) -> int:
     return int(hex_string, 16)
 
 
-def int_to_bytes(n: int) -> bytes:
-    return n.to_bytes((n.bit_length() + 7) // 8, 'big') or b'\0'
+def int_to_bytes(n: int, form: str) -> bytes:
+    return n.to_bytes((n.bit_length() + 7) // 8, form) or b'\0'
 
 
 def power(x: int, y: int, p: int) -> int:
@@ -556,7 +556,7 @@ class Client:
     def send_msg(self, msg: bytes):
         hash_sha1 = sha1()
         iv = random_bytes(16)  # AES.block_sie
-        s = int_to_bytes(self.session)
+        s = int_to_bytes(self.session, 'big')
         hash_sha1.update(s)
         sign = hash_sha1.hexdigest()
         return aes_encrypt_cbc(msg, sign[:16], iv) + iv
@@ -565,7 +565,7 @@ class Client:
         hash_sha1 = sha1()
         iv = msg[-16:]
         encrypted_msg = msg[:-16]
-        s = int_to_bytes(self.session)
+        s = int_to_bytes(self.session, 'big')
         hash_sha1.update(s)
         sign = hash_sha1.hexdigest()
         return aes_decrypt_cbc(encrypted_msg, sign[:16], iv)
@@ -684,13 +684,28 @@ def g_equal_p_minus_one():
     iv = alices_msg[-16:]
     encrypted_msg = alices_msg[:-16]
     if alice.public_key == g and bob.public_key == g:
-        s = int_to_bytes(g)
+        s = int_to_bytes(g, 'big')
         hash_sha1.update(s)
         sign = hash_sha1.hexdigest()
         hacked_decrypt = aes_decrypt_cbc(encrypted_msg, sign[:16], iv)
     else:
-        s = int_to_bytes(g)
+        s = int_to_bytes(g, 'big')
         hash_sha1.update(b"\x01")
         sign = hash_sha1.hexdigest()
         hacked_decrypt = aes_decrypt_cbc(encrypted_msg, sign[:16], iv)
     return hacked_decrypt == alice_decrypt
+
+
+def aes_ctr(plain: bytes, key: bytes, nonce: bytes, step=1) -> bytes:
+    if len(key) != 16 or len(nonce) != 8:
+        return bytes()
+    data = bytes()
+    aes = AES.new(key, AES.MODE_ECB)
+    ctr = 0
+    for i in range(0, len(plain), AES.block_size):
+        current_nonce = nonce + ctr.to_bytes(8, 'little')
+        encrypted = aes.encrypt(current_nonce)
+        current_block = plain[i:i + AES.block_size]
+        data += xor(current_block, encrypted)
+        ctr += step
+    return data

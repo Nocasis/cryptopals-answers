@@ -31,11 +31,11 @@ class TestFirstSuite:
                 flag = False
         assert flag is True
 
+    # Challenge 19.1
     def test_fixed_nonce_ctr(self):
         from base64 import b64decode
         texts = list(map(b64decode, open("res/19.txt", "r").read().split("\n")))
         key = cryplib.random_bytes(16)
-        key = b"YELLOW SUBMARINE"
         ciphertexts = [cryplib.aes_ctr(text, key, bytes([0]) * 8) for text in texts]
         maximum_len = max(list(map(len, ciphertexts)))
 
@@ -77,3 +77,49 @@ class TestFirstSuite:
                               :len(b"He, too, has been changed in his turn,")]
 
         assert decrypted_keystream == keystream
+
+    def test_fixed_nonce_ctr_stat(self):
+        from base64 import b64decode, b64encode
+        texts = list(map(b64decode, open("res/19.txt", "r").read().split("\n")))
+        key = cryplib.random_bytes(16)
+        ciphertexts = {texts.index(text): cryplib.aes_ctr(text, key, bytes([0]) * 8) for text in texts}
+
+        # for debug
+        maximum_len = max(list(map(len, ciphertexts.values())))
+        plain = bytes([0]) * maximum_len
+        encrypted_plain = cryplib.aes_ctr(plain, key, bytes([0]) * 8)
+        keystream = cryplib.xor(plain, encrypted_plain)
+        # end for debug
+
+        answer = {i: b'' for i in range(len(ciphertexts.values()))}
+        not_empty_ciphertexts = {k: v for k, v in ciphertexts.items() if len(v) != 0}
+        my_keystream = bytes()
+
+        prev_min_len = 0
+        for _ in range(len(ciphertexts.values())):
+            not_empty_ciphertexts = {k: v for k, v in not_empty_ciphertexts.items() if len(v) != 0}
+            try:
+                min_len = min(map(len, not_empty_ciphertexts.values()))
+            except ValueError:
+                break
+
+            concated = bytes()
+            used_indexes = list()
+            for k, v in not_empty_ciphertexts.items():
+                concated += v[:min_len]
+                used_indexes.append(k)
+            concated_decrypted = cryplib.attack_repeatingxor(b64encode(concated))
+
+            list_decrypted = [concated_decrypted['plain'][i:i + min_len] for i in
+                              range(0, len(concated_decrypted['plain']), min_len)]
+            j = 0
+            for i in used_indexes:
+                answer[i] += list_decrypted[j]
+                j += 1
+
+            not_empty_ciphertexts = {k: (v if len(v) > min_len else '') for k, v in not_empty_ciphertexts.items()}
+            my_keystream += concated_decrypted['key'][prev_min_len:]
+            prev_min_len = min_len
+
+        assert keystream[:20] == my_keystream[:20]
+        # print(answer)

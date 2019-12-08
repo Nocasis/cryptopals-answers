@@ -126,6 +126,8 @@ def attack_repeatingxor(data: str) -> dict:
 
     key = bytes()
     for keychar in bytes_blocks:
+        if len(keychar) <= 0:
+            continue
         key += bytes([attack_singlebytexor(keychar)["key"]])
 
     return {"plain": xor(data, key), "key": key, "keysize": true_keysize}

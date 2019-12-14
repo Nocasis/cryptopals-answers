@@ -901,7 +901,7 @@ class SHA1:
         return s
 
 
-class HmacSha1:
+class KeyedmacSha1:
     def __init__(self):
         self.key = random_bytes(16)
 
@@ -985,7 +985,7 @@ class MD4():
         return binascii.hexlify(self.digest()).decode()
 
 
-class HmacMD4:
+class KeyedmacMD4:
     def __init__(self):
         self.key = random_bytes(16)
 

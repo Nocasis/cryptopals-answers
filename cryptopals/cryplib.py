@@ -4,6 +4,8 @@ import Crypto.Cipher
 from random import choice, randint, getrandbits
 from Crypto.Cipher import AES
 from hashlib import sha1
+import struct
+import binascii
 
 FREQ = {
     "a": 8.167,
@@ -711,3 +713,282 @@ def aes_ctr(plain: bytes, key: bytes, nonce: bytes, step=1) -> bytes:
         data += xor(current_block, encrypted)
         ctr += step
     return data
+
+
+class CtrOracle:
+    def __init__(self):
+        self.key = random_bytes(16)
+
+    def encrypt(self, plain):
+        return aes_ctr(plain, self.key, bytes([0]) * 8, 1)
+
+    def edit(self, ciphertext, offset, new_text):
+        plain = aes_ctr(ciphertext, self.key, bytes([0])*8, 1)
+        new_plain = plain[:offset] + new_text + plain[offset+len(new_text):]
+        return aes_ctr(new_plain, self.key, bytes([0])*8, 1)
+
+
+class CtrBitOracle:
+
+    def __init__(self):
+        self.key = random_bytes(16)
+
+    def encrypt(self, plain):
+        return aes_ctr(plain, self.key, bytes([0]) * 8)
+
+    def get_user_data(self, userdata: bytes) -> bytes:
+        prefix = b"comment1=cooking%20MCs;userdata="
+        sufix = b";comment2=%20like%20a%20pound%20of%20bacon"
+        return aes_ctr(prefix + userdata.replace(b"=", b"").replace(b";", b"") + sufix, self.key, bytes([0])*8)
+
+    def is_admin_in_data(self, encrypted: bytes):
+        decrypted = aes_ctr(encrypted, self.key, bytes([0])*8)
+        return b";admin=true;" in decrypted
+
+
+class RecoverKeyOracle:
+
+    def __init__(self):
+        self.key = random_bytes(16)
+        self.iv = self.key
+
+    def encrypt(self, plain):
+        return aes_encrypt_cbc(plain, self.key, self.iv)
+
+    def decrypt(self, ciphertext):
+        plain = aes_decrypt_cbc(ciphertext, self.key, self.iv, False)
+        if not all(c < 128 for c in plain):
+            return False, plain
+        return b';admin=true;' in plain, b"Ok"
+
+    def get_user_data(self, userdata: bytes) -> bytes:
+        prefix = b"comment1=cooking%20MCs;userdata="
+        sufix = b";comment2=%20like%20a%20pound%20of%20bacon"
+        return aes_ctr(prefix + userdata.replace(b"=", b"").replace(b";", b"") + sufix, self.key, bytes([0])*8)
+
+    def is_admin_in_data(self, encrypted: bytes):
+        decrypted = aes_ctr(encrypted, self.key, bytes([0])*8)
+        return b";admin=true;" in decrypted
+
+
+class SHA1:
+    def __init__(self):
+        self.__H = [
+            0x67452301,
+            0xEFCDAB89,
+            0x98BADCFE,
+            0x10325476,
+            0xC3D2E1F0
+            ]
+
+    def __str__(self):
+        return ''.join((hex(h)[2:]).rjust(8, '0') for h in self.__H)
+
+    # Private static methods used for internal operations.
+    @staticmethod
+    def __ROTL(n, x, w=32):
+        return ((x << n) | (x >> w - n))
+
+    @staticmethod
+    def __padding(stream):
+        l = len(stream)  # Bytes
+        hl = [int((hex(l*8)[2:]).rjust(16, '0')[i:i+2], 16)
+              for i in range(0, 16, 2)]
+
+        l0 = (56 - l) % 64
+        if not l0:
+            l0 = 64
+
+        if isinstance(stream, str):
+            stream += chr(0b10000000)
+            stream += chr(0)*(l0-1)
+            for a in hl:
+                stream += chr(a)
+        elif isinstance(stream, bytes):
+            stream += bytes([0b10000000])
+            stream += bytes(l0-1)
+            stream += bytes(hl)
+
+        return stream
+
+    @staticmethod
+    def __prepare(stream):
+        M = []
+        n_blocks = len(stream) // 64
+
+        stream = bytearray(stream)
+
+        for i in range(n_blocks):  # 64 Bytes per Block
+            m = []
+
+            for j in range(16):  # 16 Words per Block
+                n = 0
+                for k in range(4):  # 4 Bytes per Word
+                    n <<= 8
+                    n += stream[i*64 + j*4 + k]
+
+                m.append(n)
+
+            M.append(m[:])
+
+        return M
+
+    @staticmethod
+    def __debug_print(t, a, b, c, d, e):
+        print('t = {0} : \t'.format(t),
+              (hex(a)[2:]).rjust(8, '0'),
+              (hex(b)[2:]).rjust(8, '0'),
+              (hex(c)[2:]).rjust(8, '0'),
+              (hex(d)[2:]).rjust(8, '0'),
+              (hex(e)[2:]).rjust(8, '0')
+              )
+
+    # Private instance methods used for internal operations.
+    def __process_block(self, block):
+        MASK = 2**32-1
+
+        W = block[:]
+        for t in range(16, 80):
+            W.append(SHA1.__ROTL(1, (W[t-3] ^ W[t-8] ^ W[t-14] ^ W[t-16]))
+                     & MASK)
+
+        a, b, c, d, e = self.__H[:]
+
+        for t in range(80):
+            if t <= 19:
+                K = 0x5a827999
+                f = (b & c) ^ (~b & d)
+            elif t <= 39:
+                K = 0x6ed9eba1
+                f = b ^ c ^ d
+            elif t <= 59:
+                K = 0x8f1bbcdc
+                f = (b & c) ^ (b & d) ^ (c & d)
+            else:
+                K = 0xca62c1d6
+                f = b ^ c ^ d
+
+            T = ((SHA1.__ROTL(5, a) + f + e + K + W[t]) & MASK)
+            e = d
+            d = c
+            c = SHA1.__ROTL(30, b) & MASK
+            b = a
+            a = T
+
+            #SHA1.debug_print(t, a,b,c,d,e)
+
+        self.__H[0] = (a + self.__H[0]) & MASK
+        self.__H[1] = (b + self.__H[1]) & MASK
+        self.__H[2] = (c + self.__H[2]) & MASK
+        self.__H[3] = (d + self.__H[3]) & MASK
+        self.__H[4] = (e + self.__H[4]) & MASK
+
+    # Public methods for class use.
+    def update(self, stream):
+        stream = SHA1.__padding(stream)
+        stream = SHA1.__prepare(stream)
+
+        for block in stream:
+            self.__process_block(block)
+
+    def digest(self):
+        pass
+
+    def hexdigest(self):
+        s = ''
+        for h in self.__H:
+            s += (hex(h)[2:]).rjust(8, '0')
+        return s
+
+
+class HmacSha1:
+    def __init__(self):
+        self.key = random_bytes(16)
+
+    def digest(self, data: bytes):
+        h = SHA1()
+        h.update(self.key + data)
+        return h.hexdigest()
+
+
+lrot = lambda x, n: (x << n) | (x >> (32 - n))
+
+
+class MD4():
+
+    A, B, C, D = (0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476)
+    buf = [0x00] * 64
+
+    _F = lambda self, x, y, z: ((x & y) | (~x & z))
+    _G = lambda self, x, y, z: ((x & y) | (x & z) | (y & z))
+    _H = lambda self, x, y, z: (x ^ y ^ z)
+
+    def __init__(self, message):
+        length = struct.pack('<Q', len(message) * 8)
+        while len(message) > 64:
+            self._handle(message[:64])
+            message = message[64:]
+        message += b'\x80'
+        message += bytes((56 - len(message) % 64) % 64)
+        message += length
+        while len(message):
+            self._handle(message[:64])
+            message = message[64:]
+
+    def _handle(self, chunk):
+        X = list(struct.unpack('<' + 'I' * 16, chunk))
+        A, B, C, D = self.A, self.B, self.C, self.D
+
+        for i in range(16):
+            k = i
+            if i % 4 == 0:
+                A = lrot((A + self._F(B, C, D) + X[k]) & 0xffffffff, 3)
+            elif i % 4 == 1:
+                D = lrot((D + self._F(A, B, C) + X[k]) & 0xffffffff, 7)
+            elif i % 4 == 2:
+                C = lrot((C + self._F(D, A, B) + X[k]) & 0xffffffff, 11)
+            elif i % 4 == 3:
+                B = lrot((B + self._F(C, D, A) + X[k]) & 0xffffffff, 19)
+
+        for i in range(16):
+            k = (i // 4) + (i % 4) * 4
+            if i % 4 == 0:
+                A = lrot((A + self._G(B, C, D) + X[k] + 0x5a827999) & 0xffffffff, 3)
+            elif i % 4 == 1:
+                D = lrot((D + self._G(A, B, C) + X[k] + 0x5a827999) & 0xffffffff, 5)
+            elif i % 4 == 2:
+                C = lrot((C + self._G(D, A, B) + X[k] + 0x5a827999) & 0xffffffff, 9)
+            elif i % 4 == 3:
+                B = lrot((B + self._G(C, D, A) + X[k] + 0x5a827999) & 0xffffffff, 13)
+
+        order = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
+        for i in range(16):
+            k = order[i]
+            if i % 4 == 0:
+                A = lrot((A + self._H(B, C, D) + X[k] + 0x6ed9eba1) & 0xffffffff, 3)
+            elif i % 4 == 1:
+                D = lrot((D + self._H(A, B, C) + X[k] + 0x6ed9eba1) & 0xffffffff, 9)
+            elif i % 4 == 2:
+                C = lrot((C + self._H(D, A, B) + X[k] + 0x6ed9eba1) & 0xffffffff, 11)
+            elif i % 4 == 3:
+                B = lrot((B + self._H(C, D, A) + X[k] + 0x6ed9eba1) & 0xffffffff, 15)
+
+        self.A = (self.A + A) & 0xffffffff
+        self.B = (self.B + B) & 0xffffffff
+        self.C = (self.C + C) & 0xffffffff
+        self.D = (self.D + D) & 0xffffffff
+
+    def digest(self):
+        return struct.pack('<IIII', self.A, self.B, self.C, self.D)
+
+    def hexdigest(self):
+        return binascii.hexlify(self.digest()).decode()
+
+
+class HmacMD4:
+    def __init__(self):
+        self.key = random_bytes(16)
+
+    def digest(self, data: bytes):
+        h = MD4(self.key + data)
+        return h.hexdigest()

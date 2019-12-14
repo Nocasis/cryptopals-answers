@@ -78,6 +78,7 @@ class TestFirstSuite:
 
         assert decrypted_keystream == keystream
 
+    # Challenge 20
     def test_fixed_nonce_ctr_stat(self):
         from base64 import b64decode, b64encode
         texts = list(map(b64decode, open("res/19.txt", "r").read().split("\n")))

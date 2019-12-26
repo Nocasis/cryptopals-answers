@@ -772,14 +772,17 @@ class RecoverKeyOracle:
 
 
 class SHA1:
-    def __init__(self):
-        self.__H = [
-            0x67452301,
-            0xEFCDAB89,
-            0x98BADCFE,
-            0x10325476,
-            0xC3D2E1F0
-            ]
+    def __init__(self, h=None):
+        if h is not None:
+            self.__H = h
+        else:
+            self.__H = [
+                0x67452301,
+                0xEFCDAB89,
+                0x98BADCFE,
+                0x10325476,
+                0xC3D2E1F0
+                ]
 
     def __str__(self):
         return ''.join((hex(h)[2:]).rjust(8, '0') for h in self.__H)
@@ -790,25 +793,15 @@ class SHA1:
         return ((x << n) | (x >> w - n))
 
     @staticmethod
-    def __padding(stream):
-        l = len(stream)  # Bytes
-        hl = [int((hex(l*8)[2:]).rjust(16, '0')[i:i+2], 16)
-              for i in range(0, 16, 2)]
+    def __padding(stream, ml=None):
+        if ml is None:
+            ml = len(stream) * 8
 
-        l0 = (56 - l) % 64
-        if not l0:
-            l0 = 64
+        stream += b'\x80'
+        while (len(stream) * 8) % 512 != 448:
+            stream += b'\x00'
 
-        if isinstance(stream, str):
-            stream += chr(0b10000000)
-            stream += chr(0)*(l0-1)
-            for a in hl:
-                stream += chr(a)
-        elif isinstance(stream, bytes):
-            stream += bytes([0b10000000])
-            stream += bytes(l0-1)
-            stream += bytes(hl)
-
+        stream += struct.pack('>Q', ml)
         return stream
 
     @staticmethod
@@ -884,8 +877,8 @@ class SHA1:
         self.__H[4] = (e + self.__H[4]) & MASK
 
     # Public methods for class use.
-    def update(self, stream):
-        stream = SHA1.__padding(stream)
+    def update(self, stream, ml=None):
+        stream = SHA1.__padding(stream, ml)
         stream = SHA1.__prepare(stream)
 
         for block in stream:
@@ -903,92 +896,116 @@ class SHA1:
 
 class KeyedmacSha1:
     def __init__(self):
-        self.key = random_bytes(16)
+        # self.key = random_bytes(16)
+        self.key = b"YELLOW SUBMARINE"
 
     def digest(self, data: bytes):
         h = SHA1()
         h.update(self.key + data)
         return h.hexdigest()
+    def validate(self, data: bytes, sign: str):
+        h = SHA1()
+        h.update(self.key + data)
+        if h.hexdigest() == sign:
+            return True
+        return False
 
 
-lrot = lambda x, n: (x << n) | (x >> (32 - n))
-
-
-class MD4():
-
-    A, B, C, D = (0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476)
-    buf = [0x00] * 64
-
-    _F = lambda self, x, y, z: ((x & y) | (~x & z))
-    _G = lambda self, x, y, z: ((x & y) | (x & z) | (y & z))
-    _H = lambda self, x, y, z: (x ^ y ^ z)
-
-    def __init__(self, message):
-        length = struct.pack('<Q', len(message) * 8)
-        while len(message) > 64:
-            self._handle(message[:64])
-            message = message[64:]
-        message += b'\x80'
-        message += bytes((56 - len(message) % 64) % 64)
-        message += length
-        while len(message):
-            self._handle(message[:64])
-            message = message[64:]
-
-    def _handle(self, chunk):
-        X = list(struct.unpack('<' + 'I' * 16, chunk))
-        A, B, C, D = self.A, self.B, self.C, self.D
-
-        for i in range(16):
-            k = i
-            if i % 4 == 0:
-                A = lrot((A + self._F(B, C, D) + X[k]) & 0xffffffff, 3)
-            elif i % 4 == 1:
-                D = lrot((D + self._F(A, B, C) + X[k]) & 0xffffffff, 7)
-            elif i % 4 == 2:
-                C = lrot((C + self._F(D, A, B) + X[k]) & 0xffffffff, 11)
-            elif i % 4 == 3:
-                B = lrot((B + self._F(C, D, A) + X[k]) & 0xffffffff, 19)
-
-        for i in range(16):
-            k = (i // 4) + (i % 4) * 4
-            if i % 4 == 0:
-                A = lrot((A + self._G(B, C, D) + X[k] + 0x5a827999) & 0xffffffff, 3)
-            elif i % 4 == 1:
-                D = lrot((D + self._G(A, B, C) + X[k] + 0x5a827999) & 0xffffffff, 5)
-            elif i % 4 == 2:
-                C = lrot((C + self._G(D, A, B) + X[k] + 0x5a827999) & 0xffffffff, 9)
-            elif i % 4 == 3:
-                B = lrot((B + self._G(C, D, A) + X[k] + 0x5a827999) & 0xffffffff, 13)
-
-        order = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
-        for i in range(16):
-            k = order[i]
-            if i % 4 == 0:
-                A = lrot((A + self._H(B, C, D) + X[k] + 0x6ed9eba1) & 0xffffffff, 3)
-            elif i % 4 == 1:
-                D = lrot((D + self._H(A, B, C) + X[k] + 0x6ed9eba1) & 0xffffffff, 9)
-            elif i % 4 == 2:
-                C = lrot((C + self._H(D, A, B) + X[k] + 0x6ed9eba1) & 0xffffffff, 11)
-            elif i % 4 == 3:
-                B = lrot((B + self._H(C, D, A) + X[k] + 0x6ed9eba1) & 0xffffffff, 15)
-
-        self.A = (self.A + A) & 0xffffffff
-        self.B = (self.B + B) & 0xffffffff
-        self.C = (self.C + C) & 0xffffffff
-        self.D = (self.D + D) & 0xffffffff
-
-    def digest(self):
-        return struct.pack('<IIII', self.A, self.B, self.C, self.D)
-
-    def hexdigest(self):
-        return binascii.hexlify(self.digest()).decode()
-
-
-class KeyedmacMD4:
+class HmacSha1:
     def __init__(self):
-        self.key = random_bytes(16)
+        self.block_size = 64
 
     def digest(self, data: bytes):
-        h = MD4(self.key + data)
-        return h.hexdigest()
+        h = SHA1()
+        h.update(data)
+        return bytes.fromhex(h.hexdigest())
+
+    def hmac(self, data: bytes, key=None):
+        if key is None:
+            key = random_bytes(self.block_size)
+        key = key
+        if len(key) > self.block_size:
+            key = self.digest(key)
+        if len(key) < self.block_size:
+            key = key + bytes([0]) * (self.block_size - len(key))
+
+        ipad = bytes([0x36]) * self.block_size
+        opad = bytes([0x5c]) * self.block_size
+        i_keypad = xor(ipad, key)
+        o_keypad = xor(opad, key)
+        return self.digest(o_keypad + self.digest(i_keypad + data))
+
+
+def padding(stream):
+    l = len(stream)  # Bytes
+    hl = [int((hex(l * 8)[2:]).rjust(16, '0')[i:i + 2], 16)
+          for i in range(0, 16, 2)]
+
+    l0 = (56 - l) % 64
+    if not l0:
+        l0 = 64
+
+    if isinstance(stream, str):
+        stream += chr(0b10000000)
+        stream += chr(0) * (l0 - 1)
+        for a in hl:
+            stream += chr(a)
+    elif isinstance(stream, bytes):
+        stream += bytes([0b10000000])
+        stream += bytes(l0 - 1)
+        stream += bytes(hl)
+
+    return stream
+
+
+def attack_timing_leak(filename: str):
+    import requests
+
+    alph = "abcdef0123456789"
+    url = "http://localhost:5000/test?file={filename}&signature={signature}"
+    resp_time = dict()
+    sign = str()
+    sign_size = 40
+    flag = False
+    for _ in range(41):
+        for char in alph:
+            current_sign = sign+char+'0'*(sign_size-len(sign)-1)
+            resp = requests.get(url.format(filename=filename, signature=current_sign))
+            resp_time[char] = resp.elapsed.total_seconds()
+            if "Signature correct" in resp.text:
+                flag = True
+                break
+        longest_time_char = [k for k, v in sorted(resp_time.items(), key=lambda item: item[1], reverse=True)][0]
+        sign += longest_time_char
+        print(sign, len(sign))
+        if flag:
+            break
+    assert flag
+
+
+def attack_timing_leak_longer(filename: str):
+    import requests
+    alph = "abcdef0123456789"
+    url = "http://localhost:5000/test?file={filename}&signature={signature}"
+    resp_time = {char: 0 for char in alph}
+    sign = str()
+    sign_size = 40
+    flag = False
+    for _ in range(41):
+        resp_time = {char: 0 for char in alph}
+        for char in alph:
+            for _ in range(30):
+                current_sign = sign+char+'0'*(sign_size-len(sign)-1)
+                resp = requests.get(url.format(filename=filename, signature=current_sign))
+                resp_time[char] += resp.elapsed.total_seconds()
+                if "Signature correct" in resp.text:
+                    flag = True
+                    break
+            if flag:
+                break
+        longest_time_char = [k for k, v in sorted(resp_time.items(), key=lambda item: item[1], reverse=True)][0]
+        sign += longest_time_char
+        print(sign, len(sign))
+        if flag:
+            break
+    assert flag

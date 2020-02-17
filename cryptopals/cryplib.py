@@ -962,7 +962,7 @@ def attack_timing_leak(filename: str):
     import requests
 
     alph = "abcdef0123456789"
-    url = "http://localhost:5000/test?file={filename}&signature={signature}"
+    url = "http://localhost:1337/download?file={filename}&signature={signature}"
     resp_time = dict()
     sign = str()
     sign_size = 40

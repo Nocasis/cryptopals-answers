@@ -895,9 +895,12 @@ class SHA1:
 
 
 class KeyedmacSha1:
-    def __init__(self):
+    def __init__(self, k=None):
+        if k:
+            self.key = k
+        else:
+            self.key = b"YELLOW SUBMARINE"
         # self.key = random_bytes(16)
-        self.key = b"YELLOW SUBMARINE"
 
     def digest(self, data: bytes):
         h = SHA1()

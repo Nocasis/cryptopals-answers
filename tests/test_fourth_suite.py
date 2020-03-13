@@ -43,7 +43,6 @@ class TestFourthSuite:
         plain = b"comment1=cooking%20MCs;userdata=foo;comment2=%20like%20a%20pound%20of%20bacon"
         new_msg = b";admin=true"
         token = sha1_keyed.digest(plain)
-
         for key_size in range(17):
             fake_msg = cryplib.padding(bytes([0]) * key_size + plain)[key_size:] + new_msg
             h = list(struct.unpack('>5I', bytes.fromhex(token)))
@@ -51,6 +50,27 @@ class TestFourthSuite:
             sha1.update(new_msg, (key_size + len(fake_msg)) * 8)
             fake_token = sha1.hexdigest()
 
+            if sha1_keyed.validate(fake_msg, fake_token):
+                break
+        assert sha1_keyed.validate(fake_msg, fake_token)
+
+    def test_length_extension_attackv2(self):
+        import struct
+        import base64
+        sha1_keyed = cryplib.KeyedmacSha1()
+        # plain = b"comment1=cooking%20MCs;userdata=foo;comment2=%20like%20a%20pound%20of%20bacon"
+        plain = b"login=admin;password=admin"
+        new_msg = b";admin=true"
+        token = sha1_keyed.digest(plain)
+        # token = "f6ce39195c6e7a9e3ca3fa9fa93d0d2cd7e8d630"
+        import base64
+        for key_size in range(17):
+            fake_msg = cryplib.padding(bytes([0]) * key_size + plain)[key_size:] + new_msg
+            h = list(struct.unpack('>5I', bytes.fromhex(token)))
+            sha1 = cryplib.SHA1(h)
+            sha1.update(new_msg, (key_size + len(fake_msg)) * 8)
+            fake_token = sha1.hexdigest()
+            # print(base64.b64encode(fake_msg), fake_token)
             if sha1_keyed.validate(fake_msg, fake_token):
                 break
         assert sha1_keyed.validate(fake_msg, fake_token)
